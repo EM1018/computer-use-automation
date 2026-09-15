@@ -1,0 +1,722 @@
+{
+  "$ref": "#/definitions/CapabilityArtifact",
+  "definitions": {
+    "CapabilityArtifact": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "capability": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "object",
+              "properties": {
+                "major": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "minor": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "major",
+                "minor"
+              ],
+              "additionalProperties": false
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "approved",
+                "deprecated"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "title",
+            "description",
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        "recorded_against": {
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string",
+              "minLength": 1
+            },
+            "app_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tenant": {
+              "type": "string",
+              "minLength": 1
+            },
+            "base_url": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "required": [
+            "app",
+            "app_version",
+            "tenant",
+            "base_url"
+          ],
+          "additionalProperties": false
+        },
+        "provenance": {
+          "type": "object",
+          "properties": {
+            "discovered_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "run_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "transcript_ref": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "discovered_at",
+            "model",
+            "run_id",
+            "transcript_ref"
+          ],
+          "additionalProperties": false
+        },
+        "approval": {
+          "type": "object",
+          "properties": {
+            "approver": {
+              "type": "string",
+              "minLength": 1
+            },
+            "approved_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "verification_run": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "approver",
+            "approved_at",
+            "verification_run"
+          ],
+          "additionalProperties": false
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "pattern": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sensitivity": {
+                "type": "string",
+                "enum": [
+                  "pii",
+                  "secret"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "type",
+              "required",
+              "description"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "type": {
+                "$ref": "#/definitions/CapabilityArtifact/properties/inputs/items/properties/type"
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "const": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "sensitivity": {
+                "$ref": "#/definitions/CapabilityArtifact/properties/inputs/items/properties/sensitivity"
+              }
+            },
+            "required": [
+              "name",
+              "type",
+              "description"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "navigate",
+                  "click",
+                  "fill",
+                  "select",
+                  "assert",
+                  "extract"
+                ]
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "frame": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "strategies": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "role_name"
+                            },
+                            "role": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "confidence": {
+                              "type": "string",
+                              "enum": [
+                                "high",
+                                "medium",
+                                "low"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "role",
+                            "name",
+                            "confidence"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "label"
+                            },
+                            "text": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "confidence": {
+                              "$ref": "#/definitions/CapabilityArtifact/properties/steps/items/properties/target/properties/strategies/items/anyOf/0/properties/confidence"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "text",
+                            "confidence"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "attribute"
+                            },
+                            "selector": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "confidence": {
+                              "$ref": "#/definitions/CapabilityArtifact/properties/steps/items/properties/target/properties/strategies/items/anyOf/0/properties/confidence"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "selector",
+                            "confidence"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "text_anchored"
+                            },
+                            "anchor": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "relation": {
+                              "type": "string",
+                              "enum": [
+                                "above",
+                                "below",
+                                "left_of",
+                                "right_of",
+                                "inside",
+                                "near"
+                              ]
+                            },
+                            "confidence": {
+                              "$ref": "#/definitions/CapabilityArtifact/properties/steps/items/properties/target/properties/strategies/items/anyOf/0/properties/confidence"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "anchor",
+                            "relation",
+                            "confidence"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "coordinates"
+                            },
+                            "x": {
+                              "type": "number"
+                            },
+                            "y": {
+                              "type": "number"
+                            },
+                            "viewport": {
+                              "type": "object",
+                              "properties": {
+                                "width": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                "height": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                }
+                              },
+                              "required": [
+                                "width",
+                                "height"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "confidence": {
+                              "$ref": "#/definitions/CapabilityArtifact/properties/steps/items/properties/target/properties/strategies/items/anyOf/0/properties/confidence"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "x",
+                            "y",
+                            "viewport",
+                            "confidence"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "frame",
+                  "strategies"
+                ],
+                "additionalProperties": false
+              },
+              "value": {
+                "type": "string"
+              },
+              "into": {
+                "type": "string"
+              },
+              "transform": {
+                "type": "string",
+                "enum": [
+                  "parse_currency",
+                  "trim",
+                  "parse_int"
+                ]
+              },
+              "wait": {
+                "type": "object",
+                "properties": {
+                  "for": {
+                    "type": "string",
+                    "enum": [
+                      "element_actionable",
+                      "navigation",
+                      "element_present"
+                    ]
+                  },
+                  "timeout_ms": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "for",
+                  "timeout_ms"
+                ],
+                "additionalProperties": false
+              },
+              "checkpoint": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "element_present"
+                      },
+                      "role": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "name_pattern": {
+                        "type": "string"
+                      },
+                      "within": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "text_present"
+                      },
+                      "pattern": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "within": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "pattern"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "url_matches"
+                      },
+                      "pattern": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "pattern"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "risk": {
+                "type": "string",
+                "enum": [
+                  "safe",
+                  "write",
+                  "irreversible"
+                ]
+              },
+              "on_fail": {
+                "type": "string",
+                "enum": [
+                  "evaluate_outcomes",
+                  "hard_fail"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "action",
+              "risk"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "outcomes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "class": {
+                "type": "string",
+                "const": "business_outcome"
+              },
+              "detect": {
+                "$ref": "#/definitions/CapabilityArtifact/properties/steps/items/properties/checkpoint"
+              },
+              "returns": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "id",
+              "class",
+              "detect",
+              "returns"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "recoverables": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "detect": {
+                "$ref": "#/definitions/CapabilityArtifact/properties/steps/items/properties/checkpoint"
+              },
+              "recover": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "const": "click"
+                      },
+                      "role": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "action"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "const": "wait_and_retry"
+                      },
+                      "backoff_ms": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "minItems": 1
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "backoff_ms"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "const": "escalate"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "max_attempts": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "id",
+              "detect",
+              "recover",
+              "max_attempts"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "verification": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "passed",
+                "failed"
+              ]
+            },
+            "run": {
+              "type": "string",
+              "minLength": 1
+            },
+            "failed_step": {
+              "type": "string"
+            },
+            "expected": {
+              "type": "string"
+            },
+            "observed": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "run"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema_version",
+        "capability",
+        "recorded_against",
+        "provenance",
+        "inputs",
+        "outputs",
+        "steps",
+        "outcomes",
+        "recoverables"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

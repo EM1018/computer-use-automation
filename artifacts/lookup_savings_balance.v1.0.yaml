@@ -1,0 +1,194 @@
+schema_version: 1
+
+capability:
+  id: lookup_savings_balance
+  version:
+    major: 1
+    minor: 0
+  title: Look up member savings balance
+  description: >-
+    Given a 5-digit member ID, searches for the member in the back-office
+    system and returns their savings account balance and currency. Use this
+    when asked for a member's current savings balance. Requires the operator
+    session to already be authenticated; this capability does not perform
+    login.
+  status: approved
+
+recorded_against:
+  app: legacy-cu-back-office
+  app_version: "1.0.0"
+  tenant: first_credit_union
+  base_url: http://127.0.0.1:5001
+
+provenance:
+  discovered_at: "2026-01-14T18:32:00Z"
+  model: claude-sonnet-5
+  run_id: run_2026-01-14T18-32-00Z_8f3c1a
+  transcript_ref: transcripts/lookup_savings_balance/2026-01-14-run-8f3c1a.jsonl
+
+approval:
+  approver: chocotacoxl@gmail.com
+  approved_at: "2026-01-15T09:00:00Z"
+  verification_run: run_2026-01-15T09-00-00Z_verify01
+
+inputs:
+  - name: member_id
+    type: string
+    required: true
+    pattern: "^[0-9]{5}$"
+    description: 5-digit member ID to look up.
+    sensitivity: pii
+
+outputs:
+  - name: balance
+    type: number
+    description: Current savings account balance.
+  - name: currency
+    type: string
+    description: ISO currency code for the balance.
+    const: USD
+
+steps:
+  - id: s1
+    action: navigate
+    value: /search
+    risk: safe
+    wait:
+      for: navigation
+      timeout_ms: 10000
+
+  - id: s2
+    action: fill
+    target:
+      frame: top
+      strategies:
+        - kind: attribute
+          selector: "#f_mbr_id"
+          confidence: high
+        - kind: label
+          text: Member ID
+          confidence: high
+    value: "{{member_id}}"
+    risk: safe
+
+  - id: s3
+    action: click
+    target:
+      frame: top
+      strategies:
+        - kind: role_name
+          role: button
+          name: Search
+          confidence: high
+        - kind: attribute
+          selector: "input[type='submit']"
+          confidence: medium
+    risk: safe
+    wait:
+      for: navigation
+      timeout_ms: 10000
+
+  # The click above can land on the member detail page, a "no member found"
+  # search result, or a permission-denied page — all on the same URL shape.
+  # If this checkpoint isn't met, fall through to the declared outcomes
+  # rather than treating it as an automation failure.
+  - id: s4
+    action: assert
+    checkpoint:
+      kind: element_present
+      role: heading
+      name_pattern: "Member .*"
+    risk: safe
+    on_fail: evaluate_outcomes
+    wait:
+      for: element_present
+      timeout_ms: 5000
+
+  - id: s5
+    action: extract
+    target:
+      # The account table is rendered standalone and embedded via <iframe
+      # src="/member/<mid>/panel">; the balance cell has no label or id, so
+      # it can only be found by its position relative to the row's "Savings"
+      # text (see accessibility tree notes in README).
+      frame: "iframe[src*='/panel']"
+      strategies:
+        - kind: text_anchored
+          anchor: Savings
+          relation: right_of
+          confidence: high
+        - kind: attribute
+          selector: "table.tbl1 tr:nth-child(2) td:nth-child(3)"
+          confidence: medium
+        - kind: coordinates
+          x: 240
+          y: 46
+          viewport:
+            width: 1280
+            height: 800
+          confidence: low
+    into: balance
+    transform: parse_currency
+    risk: safe
+    wait:
+      for: element_present
+      timeout_ms: 5000
+
+outcomes:
+  - id: member_not_found
+    class: business_outcome
+    detect:
+      kind: text_present
+      pattern: No member found
+      within: div.msg_err
+    returns:
+      status: member_not_found
+      message: No member found for the given member ID.
+
+  - id: permission_denied
+    class: business_outcome
+    detect:
+      kind: text_present
+      pattern: You do not have permission
+      within: div.msg_err
+    returns:
+      status: permission_denied
+      message: Operator does not have permission to view this member.
+
+recoverables:
+  - id: maintenance_interstitial
+    detect:
+      kind: text_present
+      pattern: Scheduled System Maintenance
+      within: div.msg_warn
+    recover:
+      action: click
+      role: button
+      name: Continue
+    max_attempts: 1
+
+  - id: slow_load
+    # Some members' detail pages are slow to render; if we're still on the
+    # panel URL when the step's own wait times out, back off and retry
+    # rather than failing immediately.
+    detect:
+      kind: url_matches
+      pattern: "/member/[0-9]+/panel$"
+    recover:
+      action: wait_and_retry
+      backoff_ms: [1000, 3000]
+    max_attempts: 2
+
+  - id: session_expired
+    detect:
+      kind: text_present
+      pattern: Session expired
+      within: div.msg_err
+    recover:
+      action: escalate
+      reason: "Session expired; automation holds no credentials"
+    max_attempts: 1
+
+verification:
+  status: passed
+  run: run_2026-01-15T09-00-00Z_verify01
