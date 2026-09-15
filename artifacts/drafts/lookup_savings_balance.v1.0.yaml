@@ -12,7 +12,7 @@ capability:
     when asked for a member's current savings balance. Requires the operator
     session to already be authenticated; this capability does not perform
     login.
-  status: approved
+  status: draft
 
 recorded_against:
   app: legacy-cu-back-office
@@ -25,11 +25,6 @@ provenance:
   model: claude-sonnet-5
   run_id: run_2026-01-14T18-32-00Z_8f3c1a
   transcript_ref: transcripts/lookup_savings_balance/2026-01-14-run-8f3c1a.jsonl
-
-approval:
-  approver: chocotacoxl@gmail.com
-  approved_at: "2026-01-15T09:00:00Z"
-  verification_run: run_2026-01-15T09-00-00Z_verify01
 
 inputs:
   - name: member_id
@@ -86,7 +81,7 @@ steps:
     risk: safe
     wait:
       for: navigation
-      timeout_ms: 10000
+      timeout_ms: 3000
 
   # The click above can land on the member detail page, a "no member found"
   # search result, or a permission-denied page — all on the same URL shape.
@@ -95,14 +90,13 @@ steps:
   - id: s4
     action: assert
     checkpoint:
-      kind: element_present
-      role: heading
-      name_pattern: "Member .*"
+      kind: text_present
+      pattern: Accounts
     risk: safe
     on_fail: evaluate_outcomes
     wait:
       for: element_present
-      timeout_ms: 5000
+      timeout_ms: 3000
 
   - id: s5
     action: extract
@@ -168,15 +162,17 @@ recoverables:
     max_attempts: 1
 
   - id: slow_load
-    # Some members' detail pages are slow to render; if we're still on the
-    # panel URL when the step's own wait times out, back off and retry
-    # rather than failing immediately.
+    # Some members' detail pages are slow to respond. The server does not
+    # send any bytes until the response is ready, so the browser stays on
+    # the pre-navigation search page for the whole delay; seeing that page
+    # still up after the click's wait has timed out is the signal to give
+    # this request more time rather than treat it as broken.
     detect:
       kind: url_matches
-      pattern: "/member/[0-9]+/panel$"
+      pattern: /search$
     recover:
       action: wait_and_retry
-      backoff_ms: [1000, 3000]
+      backoff_ms: [3000, 6000]
     max_attempts: 2
 
   - id: session_expired
@@ -188,7 +184,3 @@ recoverables:
       action: escalate
       reason: "Session expired; automation holds no credentials"
     max_attempts: 1
-
-verification:
-  status: passed
-  run: run_2026-01-15T09-00-00Z_verify01
