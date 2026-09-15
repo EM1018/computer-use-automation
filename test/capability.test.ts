@@ -6,8 +6,23 @@ import { describe, expect, it, afterEach } from "vitest";
 import { CapabilityArtifactSchema, type CapabilityArtifact, type Action } from "../src/schema/capability.js";
 import { loadArtifact, resolveCapability } from "../src/loader.js";
 import { classifyChange } from "../src/version.js";
+import { computeContentHash } from "../src/content-hash.js";
 
-const EXAMPLE_ARTIFACT_PATH = join(process.cwd(), "artifacts", "lookup_savings_balance.v1.0.yaml");
+const EXAMPLE_ARTIFACT_PATH = join(process.cwd(), "artifacts", "drafts", "lookup_savings_balance.v1.0.yaml");
+
+/** Stamps a draft fixture as approved with a real, matching content hash — a synthetic approval for test purposes, not a real one. */
+function approve(artifact: CapabilityArtifact): CapabilityArtifact {
+  const withStatus: CapabilityArtifact = { ...artifact, capability: { ...artifact.capability, status: "approved" } };
+  return {
+    ...withStatus,
+    approval: {
+      approver: "test-fixture",
+      approved_at: "2026-01-15T09:00:00Z",
+      verification_run: "run_test_verify",
+      content_hash: computeContentHash(withStatus),
+    },
+  };
+}
 
 function baseArtifact(): CapabilityArtifact {
   const loaded = loadArtifact(EXAMPLE_ARTIFACT_PATH);
@@ -26,7 +41,7 @@ describe("example artifact", () => {
       return;
     }
     expect(result.artifact.capability.id).toBe("lookup_savings_balance");
-    expect(result.artifact.capability.status).toBe("approved");
+    expect(result.artifact.capability.status).toBe("draft");
     expect(result.artifact.inputs).toHaveLength(1);
     expect(result.artifact.outputs.map((o) => o.name)).toEqual(["balance", "currency"]);
     expect(result.artifact.steps.length).toBeGreaterThan(0);
@@ -135,13 +150,11 @@ describe("resolveCapability", () => {
 
     const approvedV1 = baseArtifact();
     approvedV1.capability.version = { major: 1, minor: 0 };
-    approvedV1.capability.status = "approved";
-    writeArtifactFile(dir, "lookup_savings_balance.v1.0.yaml", approvedV1);
+    writeArtifactFile(dir, "lookup_savings_balance.v1.0.yaml", approve(approvedV1));
 
     const approvedV2 = baseArtifact();
     approvedV2.capability.version = { major: 1, minor: 2 };
-    approvedV2.capability.status = "approved";
-    writeArtifactFile(dir, "lookup_savings_balance.v1.2.yaml", approvedV2);
+    writeArtifactFile(dir, "lookup_savings_balance.v1.2.yaml", approve(approvedV2));
 
     const draftV3 = baseArtifact();
     draftV3.capability.version = { major: 1, minor: 3 };
@@ -153,8 +166,7 @@ describe("resolveCapability", () => {
     // would win and the assertion below would fail.
     const shouldNeverBeReturned = baseArtifact();
     shouldNeverBeReturned.capability.version = { major: 1, minor: 9 };
-    shouldNeverBeReturned.capability.status = "approved";
-    writeArtifactFile(join(dir, "drafts"), "lookup_savings_balance.v1.9.yaml", shouldNeverBeReturned);
+    writeArtifactFile(join(dir, "drafts"), "lookup_savings_balance.v1.9.yaml", approve(shouldNeverBeReturned));
 
     const result = resolveCapability("lookup_savings_balance", 1, dir);
     expect(result.ok).toBe(true);

@@ -59,6 +59,11 @@ export const ApprovalSchema = z.object({
   approver: z.string().min(1),
   approved_at: z.string().datetime(),
   verification_run: z.string().min(1),
+  // SHA-256 of the canonicalized artifact, excluding this approval block
+  // itself. Approved versions are immutable: the loader recomputes and
+  // compares this on every load of an artifact with status "approved", and
+  // refuses to load it on a mismatch.
+  content_hash: z.string().min(1),
 });
 export type Approval = z.infer<typeof ApprovalSchema>;
 

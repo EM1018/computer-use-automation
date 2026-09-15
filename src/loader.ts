@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import yaml from "js-yaml";
 import type { ZodIssue } from "zod";
+import { computeContentHash } from "./content-hash.js";
 import { CapabilityArtifactSchema, type CapabilityArtifact } from "./schema/capability.js";
 
 export interface ValidationIssue {
@@ -50,7 +51,30 @@ export function loadArtifact(path: string): LoadArtifactResult {
     };
   }
 
-  return { ok: true, artifact: result.data };
+  const artifact = result.data;
+  const { id, version } = artifact.capability;
+  const label = `capability "${id}"@${version.major}.${version.minor}`;
+
+  if (artifact.capability.status === "approved") {
+    if (!artifact.approval) {
+      return {
+        ok: false,
+        error: { message: `${label} is marked approved but has no approval block`, issues: [] },
+      };
+    }
+    const recomputed = computeContentHash(artifact);
+    if (recomputed !== artifact.approval.content_hash) {
+      return {
+        ok: false,
+        error: {
+          message: `${label} is marked approved but its content hash does not match the recorded approval — it has been edited since approval and must not run`,
+          issues: [],
+        },
+      };
+    }
+  }
+
+  return { ok: true, artifact };
 }
 
 const ARTIFACT_FILENAME_PATTERN = /^(.+)\.v(\d+)\.(\d+)\.yaml$/;

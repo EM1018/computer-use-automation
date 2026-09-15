@@ -129,12 +129,17 @@
             "verification_run": {
               "type": "string",
               "minLength": 1
+            },
+            "content_hash": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": [
             "approver",
             "approved_at",
-            "verification_run"
+            "verification_run",
+            "content_hash"
           ],
           "additionalProperties": false
         },
