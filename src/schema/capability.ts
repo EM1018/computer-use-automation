@@ -272,6 +272,14 @@ export const RecoveryActionSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("escalate"),
     reason: z.string().min(1),
+    // The machine-checkable page state that means "a human has resolved
+    // this and the stuck step can be (re)attempted" — e.g. "the login form
+    // is gone and the search form is back". Optional because not every
+    // escalation reason has an obvious single-checkpoint answer, but
+    // strongly preferred over the engine's generic fallback derivation
+    // (see deriveResumeContract in ../engine/escalation.ts), which is a
+    // best-effort guess, not a substitute for authored intent.
+    resume_checkpoint: CheckpointSchema.optional(),
   }),
 ]);
 export type RecoveryAction = z.infer<typeof RecoveryActionSchema>;

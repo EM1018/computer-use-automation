@@ -183,4 +183,10 @@ recoverables:
     recover:
       action: escalate
       reason: "Session expired; automation holds no credentials"
+      # A human logging back in lands on /search, which re-renders this
+      # form. Declaring it here means replay doesn't have to guess a resume
+      # signal from the stuck step's own locator strategies.
+      resume_checkpoint:
+        kind: element_present
+        within: "#f_mbr_id"
     max_attempts: 1

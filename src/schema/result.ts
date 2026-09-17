@@ -6,18 +6,19 @@
  * value is whatever `returns.status` the artifact's own `outcomes` declare
  * (e.g. "member_not_found"), which is not known at compile time. Because of
  * that it cannot be a literal in the union's discriminant the way the other
- * four branches are. Narrow in this order instead:
+ * branches are. Narrow in this order instead:
  *
  *   if (result.status === "success") { ... }
  *   else if (result.status === "failed") { ... }
  *   else if (result.status === "escalated") { ... }
+ *   else if (result.status === "escalation_timeout") { ... }
  *   else if (result.status === "invalid_input") { ... }
  *   else { // business outcome; result.status is the artifact-defined id
  *     const outcome: BusinessOutcomeResult = result;
  *   }
  *
- * i.e. check the four reserved literal statuses first — anything left over
- * is a business outcome.
+ * i.e. check the reserved literal statuses first — anything left over is a
+ * business outcome.
  */
 
 export interface SuccessResult {
@@ -57,6 +58,20 @@ export interface EscalatedResult {
   run_id: string;
 }
 
+/**
+ * Distinct from a plain FailedResult: this specifically means "nobody ever
+ * claimed the intervention" (PENDING_INTERVENTION's own TTL expired), as
+ * opposed to a human claiming it and then the run failing for some other
+ * reason. A human-control TTL expiry (someone claimed but never resumed) is
+ * reported as an ordinary FailedResult instead — by that point a human WAS
+ * driving, so it is a run failure, not an escalation that went nowhere.
+ */
+export interface EscalationTimeoutResult {
+  status: "escalation_timeout";
+  intervention_id: string;
+  run_id: string;
+}
+
 export interface InvalidInputError {
   path: string;
   message: string;
@@ -72,4 +87,5 @@ export type CapabilityResult =
   | BusinessOutcomeResult
   | FailedResult
   | EscalatedResult
+  | EscalationTimeoutResult
   | InvalidInputResult;

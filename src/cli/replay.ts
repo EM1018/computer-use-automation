@@ -157,6 +157,21 @@ async function main(): Promise<void> {
   console.log(JSON.stringify(result));
   process.exitCode = result.status === "failed" || result.status === "invalid_input" ? 1 : 0;
 
+  if ("resumable" in result) {
+    // The whole point of escalation is that the browser stays open for a
+    // human to take over — closing it here would defeat that. Ownership of
+    // the session now belongs to whatever operator surface claims/resumes
+    // the intervention (see src/operator/server.ts and src/demo/escalation.ts);
+    // this bare CLI doesn't run one, so leave the process alive and let the
+    // PENDING_INTERVENTION TTL self-terminate it if nobody does.
+    console.error(
+      `run "${result.run_id}" escalated (intervention ${result.intervention_id}); session left open for a human. ` +
+        "This CLI has no operator surface attached — run one (see npm run demo:escalation) to claim/resume it, " +
+        "or it will time out and close itself.",
+    );
+    return;
+  }
+
   const holdMs = Number(process.env["HOLD_MS"] ?? "0");
   if (holdMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, holdMs));

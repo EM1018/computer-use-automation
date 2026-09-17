@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "generate:schema": "tsx src/generate-schema.ts",
-    "replay": "tsx src/cli/replay.ts"
+    "replay": "tsx src/cli/replay.ts",
+    "demo:escalation": "tsx src/demo/escalation.ts"
   },
   "dependencies": {
     "js-yaml": "^4.1.0",

@@ -118,14 +118,13 @@ function checkPolicy(artifact: CapabilityArtifact, policy: PolicyConfig): Policy
     }
   }
 
-  const hasIrreversible = artifact.steps.some((step) => step.risk === "irreversible");
-  if (hasIrreversible && !policy.confirmIrreversible) {
-    return {
-      ok: false,
-      expected: "explicit confirmation for a run containing an irreversible step",
-      observed: "no confirmation was passed",
-    };
-  }
+  // Deliberately NOT checked here: whether the artifact contains a
+  // risk:"irreversible" step without confirmIrreversible. That used to be a
+  // preflight hard-fail, but a policy block on an irreversible step is one
+  // of the four escalation triggers (see ./escalation.ts) — servicing it
+  // means handing a human the SAME live, already-authenticated browser
+  // session, which does not exist yet at preflight time. It is checked
+  // instead at the moment the engine is about to execute that step.
 
   return { ok: true };
 }

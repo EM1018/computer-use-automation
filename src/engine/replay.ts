@@ -19,26 +19,51 @@
  *     one deliberate delay in this file is the artifact-declared
  *     `backoff_ms` pause before a wait_and_retry attempt, which is data,
  *     not a guess.
+ *
+ * Caller-facing boundary for escalation: when a run can't safely continue
+ * unattended, `replay()` returns `{ status: "escalated", ... }` immediately
+ * — it does NOT block the caller for the duration of human work. The run
+ * keeps going out-of-band: `startEscalation` writes the intervention record
+ * and kicks off (without awaiting) `continueAfterEscalation`, which blocks
+ * on the session's own condition variables (see Session.awaitClaim /
+ * awaitResume — a real Promise a human's action resolves, not a polling
+ * loop) until a human claims and resumes it, then re-verifies page state
+ * and keeps interpreting the artifact from there. The eventual outcome is
+ * only ever observable via evidence/<run_id>/result.json (rewritten when
+ * the continuation finishes) — nothing about this design lets a caller
+ * await it directly, which is the point: an agent that escalated is not
+ * meant to sit there holding a request open for up to an hour.
  */
 
 import { randomUUID } from "node:crypto";
 import type { Page } from "playwright";
-import type { CapabilityArtifact, RecoveryAction, Step, Transform, Wait } from "../schema/capability.js";
-import type { CapabilityResult } from "../schema/result.js";
+import type { Checkpoint, RecoveryAction, Step, Transform, Wait } from "../schema/capability.js";
+import type { CapabilityArtifact } from "../schema/capability.js";
+import type { EscalationTrigger } from "../schema/intervention.js";
+import type { CapabilityResult, EscalationTimeoutResult, FailedResult } from "../schema/result.js";
 import { AmbiguousTarget, NoTargetFound, StepUnmet } from "./errors.js";
 import { checkpointMatches, describeObserved } from "./detect.js";
 import { resolveFrameScope, resolveTarget, type AriaRole, type ResolvedTarget } from "./locate.js";
 import { preflight, type InvocationInputs } from "./policy.js";
-import type { PolicyConfig } from "./config.js";
-import { GLOBAL_RECOVERY_CAP } from "./config.js";
+import type { EscalationTtlConfig, PolicyConfig } from "./config.js";
+import { DEFAULT_ESCALATION_TTL, GLOBAL_RECOVERY_CAP } from "./config.js";
 import { Redactor } from "./redactor.js";
 import { EvidenceWriter, type StepLogEntry } from "./evidence.js";
 import type { Session } from "./session.js";
+import {
+  buildInterventionRecord,
+  deriveResumeContract,
+  escalationRegistry,
+  verifyResume,
+  type EscalationHandle,
+} from "./escalation.js";
 
 export interface ReplayOptions {
   runId?: string;
   /** Directory evidence/<run_id>/ is created under. Defaults to "evidence". */
   evidenceRoot?: string;
+  /** Overrides for the PENDING_INTERVENTION / HUMAN_CONTROL timeouts. Unset fields fall back to DEFAULT_ESCALATION_TTL. */
+  escalation?: Partial<EscalationTtlConfig>;
 }
 
 interface RunContext {
@@ -50,6 +75,9 @@ interface RunContext {
   recoveryAttempts: Map<string, number>;
   globalRecoveryCount: { count: number };
   session: Session;
+  /** Ids of steps that completed successfully so far, across the initial leg and any resumed continuation. */
+  stepsCompleted: string[];
+  startedAt: number;
 }
 
 /**
@@ -82,6 +110,8 @@ export async function replay(
     await evidence.writeWarning(runId, pre.warning);
   }
 
+  const ttl: EscalationTtlConfig = { ...DEFAULT_ESCALATION_TTL, ...options.escalation };
+
   const ctx: RunContext = {
     page: session.page,
     artifact,
@@ -91,77 +121,54 @@ export async function replay(
     recoveryAttempts: new Map(),
     globalRecoveryCount: { count: 0 },
     session,
+    stepsCompleted: [],
+    startedAt: Date.now(),
   };
 
   await session.context.tracing.start({ screenshots: true, snapshots: true });
 
-  const startedAt = Date.now();
-  let stepsExecuted = 0;
-  let terminal: CapabilityResult | undefined;
+  const terminal = await executeSteps(ctx, evidence, policy, ttl, 0);
 
-  for (const step of artifact.steps) {
-    const stepStart = Date.now();
-    try {
-      const outcome = await runStep(ctx, step);
-      if (outcome.type === "terminal") {
-        terminal = outcome.result;
-        await evidence.writeStep(
-          baseLogEntry(ctx, step, stepStart, outcome.result.status, describeObservedFailure(outcome.result)),
-        );
-        break;
-      }
-
-      stepsExecuted += 1;
-      const entry = baseLogEntry(ctx, step, stepStart, "ok", describeStepDetail(step, ctx));
-      if (outcome.resolved?.kind === "locator") {
-        entry.strategy_index_used = outcome.resolved.strategyIndex;
-        entry.strategy_kind = outcome.resolved.strategyKind;
-      }
-      await evidence.writeStep(entry);
-    } catch (err) {
-      // AmbiguousTarget, ControlViolation, or anything unforeseen: an
-      // immediate hard stop that bypasses outcome/recoverable evaluation
-      // entirely, since these are not "which page state are we in?"
-      // questions — they are broken recordings or illegal session use.
-      terminal = {
-        status: "failed",
-        failed_step: step.id,
-        expected: "step to execute without an unrecoverable engine error",
-        observed: err instanceof Error ? err.message : String(err),
-        evidence: {},
-        run_id: runId,
-      };
-      await evidence.writeStep(baseLogEntry(ctx, step, stepStart, "failed", terminal.observed));
-      break;
-    }
+  if ("resumable" in terminal) {
+    // See the module doc comment: this is the deliberate caller-facing
+    // boundary. Tracing stays running and evidence stays open — a
+    // background continuation (already started inside executeSteps) owns
+    // finishing the run and finalizing evidence once a human acts.
+    return terminal;
   }
 
-  terminal ??= {
-    status: "success",
-    outputs: finalizeOutputs(artifact, ctx.outputs),
-    run_id: runId,
-    steps_executed: stepsExecuted,
-    duration_ms: Date.now() - startedAt,
-  };
+  return finalizeTerminal(ctx, evidence, terminal);
+}
 
-  // `status` alone cannot discriminate this union (a business outcome's
-  // status is an artifact-defined string, not a literal) — narrow on a
-  // field unique to each reserved branch instead.
-  if ("evidence" in terminal) {
+/**
+ * Finalizes a run's TRUE terminal outcome (success, business outcome,
+ * failed, or escalation_timeout) by stopping tracing and writing
+ * result.json. Never called for a plain "escalated" result — that leaves
+ * tracing running for the continuation. May be called twice for one run_id
+ * (once with "escalated" is never true, but a timeout/failure reached after
+ * a resume rewrites result.json over the initial "escalated" write) —
+ * result.json reflects the latest known outcome, which is what a caller
+ * checking it later wants.
+ */
+async function finalizeTerminal(ctx: RunContext, evidence: EvidenceWriter, terminal: CapabilityResult): Promise<CapabilityResult> {
+  let result = terminal;
+  const wantsTraceFile = "evidence" in result || result.status === "escalation_timeout";
+
+  if ("evidence" in result) {
     const screenshotPath = await evidence.writeScreenshot(ctx.page).catch(() => undefined);
-    await session.context.tracing.stop({ path: evidence.tracePath() }).catch(() => undefined);
     if (screenshotPath) {
-      terminal = { ...terminal, evidence: { ...terminal.evidence, screenshot: screenshotPath } };
+      result = { ...result, evidence: { ...result.evidence, screenshot: screenshotPath } };
     }
-  } else if ("resumable" in terminal) {
-    await evidence.writeScreenshot(ctx.page).catch(() => undefined);
-    await session.context.tracing.stop({ path: evidence.tracePath() }).catch(() => undefined);
-  } else {
-    await session.context.tracing.stop().catch(() => undefined);
   }
 
-  await evidence.writeResult(terminal);
-  return terminal;
+  if (wantsTraceFile) {
+    await ctx.session.context.tracing.stop({ path: evidence.tracePath() }).catch(() => undefined);
+  } else {
+    await ctx.session.context.tracing.stop().catch(() => undefined);
+  }
+
+  await evidence.writeResult(result);
+  return result;
 }
 
 function baseLogEntry(ctx: RunContext, step: Step, stepStart: number, outcome: string, detail: string): StepLogEntry {
@@ -192,7 +199,260 @@ function describeObservedFailure(result: CapabilityResult): string {
   return result.status;
 }
 
-type StepRunOutcome = { type: "done"; resolved: ResolvedTarget | undefined } | { type: "terminal"; result: CapabilityResult };
+type StepRunOutcome =
+  | { type: "done"; resolved: ResolvedTarget | undefined }
+  | { type: "terminal"; result: CapabilityResult }
+  | { type: "escalate"; trigger: EscalationTrigger; detail: string; resumeCheckpoint: Checkpoint | undefined };
+
+/** True when a step is blocked by policy rather than page state — checked before the step is attempted at all, never mid-action. */
+function checkIrreversiblePolicy(step: Step, policy: PolicyConfig): string | undefined {
+  if (step.risk !== "irreversible" || policy.confirmIrreversible) {
+    return undefined;
+  }
+  return `step "${step.id}" is risk:"irreversible" and policy.confirmIrreversible was not set; unattended automation refuses to perform it without a human present`;
+}
+
+/**
+ * Runs artifact steps from `startIndex` to completion (or a terminal
+ * result). Resumable by construction — `ctx` is shared and mutated across
+ * calls, so a continuation invoked after a human resumes a run picks up
+ * `stepsCompleted`/`outputs`/recovery counters exactly where the interrupted
+ * call left them, rather than starting a fresh run context.
+ */
+async function executeSteps(
+  ctx: RunContext,
+  evidence: EvidenceWriter,
+  policy: PolicyConfig,
+  ttl: EscalationTtlConfig,
+  startIndex: number,
+): Promise<CapabilityResult> {
+  for (let index = startIndex; index < ctx.artifact.steps.length; index += 1) {
+    const step = ctx.artifact.steps[index];
+    if (!step) {
+      continue;
+    }
+    const stepStart = Date.now();
+
+    const policyBlockDetail = checkIrreversiblePolicy(step, policy);
+    if (policyBlockDetail) {
+      return await startEscalation(ctx, evidence, policy, ttl, step, "policy_block", policyBlockDetail, undefined);
+    }
+
+    try {
+      const outcome = await runStep(ctx, step);
+
+      if (outcome.type === "escalate") {
+        return await startEscalation(ctx, evidence, policy, ttl, step, outcome.trigger, outcome.detail, outcome.resumeCheckpoint);
+      }
+
+      if (outcome.type === "terminal") {
+        await evidence.writeStep(
+          baseLogEntry(ctx, step, stepStart, outcome.result.status, describeObservedFailure(outcome.result)),
+        );
+        return outcome.result;
+      }
+
+      ctx.stepsCompleted.push(step.id);
+      const entry = baseLogEntry(ctx, step, stepStart, "ok", describeStepDetail(step, ctx));
+      if (outcome.resolved?.kind === "locator") {
+        entry.strategy_index_used = outcome.resolved.strategyIndex;
+        entry.strategy_kind = outcome.resolved.strategyKind;
+      }
+      await evidence.writeStep(entry);
+    } catch (err) {
+      // AmbiguousTarget, ControlViolation, or anything unforeseen: an
+      // immediate hard stop that bypasses outcome/recoverable evaluation
+      // entirely, since these are not "which page state are we in?"
+      // questions — they are broken recordings or illegal session use.
+      const terminal: FailedResult = {
+        status: "failed",
+        failed_step: step.id,
+        expected: "step to execute without an unrecoverable engine error",
+        observed: err instanceof Error ? err.message : String(err),
+        evidence: {},
+        run_id: ctx.runId,
+      };
+      await evidence.writeStep(baseLogEntry(ctx, step, stepStart, "failed", terminal.observed));
+      return terminal;
+    }
+  }
+
+  return {
+    status: "success",
+    outputs: finalizeOutputs(ctx.artifact, ctx.outputs),
+    run_id: ctx.runId,
+    steps_executed: ctx.stepsCompleted.length,
+    duration_ms: Date.now() - ctx.startedAt,
+  };
+}
+
+/**
+ * Writes the intervention record, arms the session's PENDING_INTERVENTION
+ * wait, and kicks off (without awaiting) the out-of-band continuation.
+ * Returns the "escalated" result immediately — see the module doc comment.
+ */
+async function startEscalation(
+  ctx: RunContext,
+  evidence: EvidenceWriter,
+  policy: PolicyConfig,
+  ttl: EscalationTtlConfig,
+  step: Step,
+  trigger: EscalationTrigger,
+  detail: string,
+  declaredCheckpoint: Checkpoint | undefined,
+): Promise<CapabilityResult> {
+  const screenshotPath = (await evidence.writeScreenshot(ctx.page).catch(() => undefined)) ?? "";
+  const resumeContract = deriveResumeContract(ctx.artifact, step, trigger, declaredCheckpoint);
+  const record = buildInterventionRecord({
+    session: ctx.session,
+    runId: ctx.runId,
+    artifact: ctx.artifact,
+    trigger,
+    detail,
+    currentStep: step.id,
+    stepsCompleted: [...ctx.stepsCompleted],
+    currentUrl: ctx.page.url(),
+    screenshotPath,
+    resumeContract,
+  });
+  await evidence.writeIntervention(record);
+  await evidence.writeStep({
+    run_id: ctx.runId,
+    step: step.id,
+    action: step.action,
+    duration_ms: 0,
+    outcome: "escalated",
+    actor: ctx.session.controller,
+    detail: `escalated (${trigger}): ${detail}`,
+  });
+
+  ctx.session.beginEscalation();
+  const handle: EscalationHandle = { session: ctx.session, evidence, artifact: ctx.artifact, record };
+  escalationRegistry.register(handle);
+
+  void continueAfterEscalation(ctx, evidence, policy, handle, ttl).catch((err: unknown) => {
+    // A defensive backstop only: every branch inside continueAfterEscalation
+    // already resolves to a terminal write or an intentional early return.
+    // Reaching here means something broke outside that control flow (e.g.
+    // disk I/O), and there is no caller left waiting to report it to.
+    console.error(`escalation continuation for run "${ctx.runId}" failed unexpectedly:`, err);
+  });
+
+  return {
+    status: "escalated",
+    intervention_id: record.intervention_id,
+    reason: detail,
+    resumable: true,
+    run_id: ctx.runId,
+  };
+}
+
+/**
+ * The out-of-band continuation: blocks on the session's condition
+ * variables (no polling) through PENDING_INTERVENTION and HUMAN_CONTROL,
+ * then re-verifies and resumes stepping through the artifact. Every branch
+ * either returns having already written the run's final outcome, or
+ * returns having intentionally left it alone (abandoned mid-wait — the
+ * intervention record's status is the audit trail for that, not a
+ * synthesized result).
+ */
+async function continueAfterEscalation(
+  ctx: RunContext,
+  evidence: EvidenceWriter,
+  policy: PolicyConfig,
+  handle: EscalationHandle,
+  ttl: EscalationTtlConfig,
+): Promise<void> {
+  const session = ctx.session;
+  const interventionId = handle.record.intervention_id;
+
+  await session.awaitClaim(ttl.pendingInterventionTtlMs);
+  // Read the CURRENT state fresh into a local: `session.state` is a getter
+  // over mutable private state, so each read after an await can legitimately
+  // differ from the last (TypeScript narrows getter reads like readonly
+  // properties, which is unsound here across an await — the local snapshot
+  // sidesteps that instead of fighting it with casts at every check).
+  const afterClaim: typeof session.state = session.state;
+
+  if (afterClaim === "terminated") {
+    // Abandoned before anyone claimed it. abandonIntervention() already
+    // wrote the record and closed the session.
+    escalationRegistry.remove(interventionId);
+    return;
+  }
+
+  if (afterClaim === "pending_intervention") {
+    // awaitClaim resolved "timed_out": nobody claimed it in time.
+    handle.record = { ...handle.record, status: "timed_out" };
+    await evidence.writeIntervention(handle.record);
+    escalationRegistry.remove(interventionId);
+    const terminal: EscalationTimeoutResult = { status: "escalation_timeout", intervention_id: interventionId, run_id: ctx.runId };
+    await finalizeTerminal(ctx, evidence, terminal);
+    session.terminate();
+    await session.close().catch(() => undefined);
+    await session.browser.close().catch(() => undefined);
+    return;
+  }
+
+  // afterClaim === "human_control": claimed within the TTL.
+  await session.awaitResume(ttl.humanControlTtlMs);
+  const afterResume: typeof session.state = session.state;
+
+  if (afterResume === "terminated") {
+    // Abandoned while a human held control.
+    escalationRegistry.remove(interventionId);
+    return;
+  }
+
+  if (afterResume === "human_control") {
+    // awaitResume resolved "timed_out": claimed, but never handed back.
+    const terminal: FailedResult = {
+      status: "failed",
+      failed_step: handle.record.context.current_step,
+      expected: "a human to resume the run within the human-control timeout",
+      observed: `session "${session.id}" was claimed but never resumed before the timeout`,
+      evidence: {},
+      run_id: ctx.runId,
+    };
+    await finalizeTerminal(ctx, evidence, terminal);
+    session.reclaim();
+    session.terminate();
+    await session.close().catch(() => undefined);
+    await session.browser.close().catch(() => undefined);
+    return;
+  }
+
+  // session.state === "resuming": a human called resume(). Re-verify —
+  // never assume the human did exactly what the contract expected.
+  escalationRegistry.remove(interventionId);
+  const verification = await verifyResume(ctx.page, ctx.artifact, handle.record);
+
+  if (verification.type === "hard_fail") {
+    const terminal: FailedResult = {
+      status: "failed",
+      failed_step: handle.record.context.current_step,
+      expected: verification.expected,
+      observed: verification.observed,
+      evidence: {},
+      run_id: ctx.runId,
+    };
+    await finalizeTerminal(ctx, evidence, terminal);
+    return;
+  }
+
+  session.finishResume();
+  const resumeIndex = ctx.artifact.steps.findIndex((candidate) => candidate.id === verification.fromStepId);
+  const terminal = await executeSteps(ctx, evidence, policy, ttl, resumeIndex >= 0 ? resumeIndex : 0);
+
+  if ("resumable" in terminal) {
+    // The resumed run hit another escalation; that call already registered
+    // its own continuation and evidence. Tracing must keep running for it,
+    // so there is nothing further to finalize here.
+    return;
+  }
+
+  await finalizeTerminal(ctx, evidence, terminal);
+}
 
 /** Runs one artifact step to completion, including any recoverable-driven retries. */
 async function runStep(ctx: RunContext, step: Step): Promise<StepRunOutcome> {
@@ -225,6 +485,9 @@ async function runStep(ctx: RunContext, step: Step): Promise<StepRunOutcome> {
       }
 
       const decision = await evaluateFailure(ctx, step, err);
+      if (decision.type === "escalate") {
+        return { type: "escalate", trigger: decision.trigger, detail: decision.detail, resumeCheckpoint: decision.resumeCheckpoint };
+      }
       if (decision.type !== "retry") {
         return { type: "terminal", result: decision.result };
       }
@@ -376,7 +639,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-type FailureDecision = { type: "retry"; skipAction: boolean } | { type: "terminal"; result: CapabilityResult };
+type FailureDecision =
+  | { type: "retry"; skipAction: boolean }
+  | { type: "terminal"; result: CapabilityResult }
+  | { type: "escalate"; trigger: "declared_escalation"; detail: string; resumeCheckpoint: Checkpoint | undefined };
 
 /**
  * Phase 3. Order matters: outcomes before recoverables, because a
@@ -422,14 +688,10 @@ async function evaluateFailure(ctx: RunContext, step: Step, failure: StepUnmet):
     }
     if (recoverable.recover.action === "escalate") {
       return {
-        type: "terminal",
-        result: {
-          status: "escalated",
-          intervention_id: randomUUID(),
-          reason: recoverable.recover.reason,
-          resumable: true,
-          run_id: ctx.runId,
-        },
+        type: "escalate",
+        trigger: "declared_escalation",
+        detail: recoverable.recover.reason,
+        resumeCheckpoint: recoverable.recover.resume_checkpoint,
       };
     }
 

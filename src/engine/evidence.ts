@@ -1,8 +1,10 @@
 import { mkdir, appendFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import yaml from "js-yaml";
 import type { Page } from "playwright";
 import type { Action, Strategy } from "../schema/capability.js";
 import type { CapabilityResult } from "../schema/result.js";
+import type { InterventionRecord } from "../schema/intervention.js";
 import type { Redactor } from "./redactor.js";
 import type { Controller } from "./session.js";
 
@@ -68,5 +70,21 @@ export class EvidenceWriter {
 
   tracePath(): string {
     return join(this.runDir, "trace.zip");
+  }
+
+  /**
+   * Writes (or overwrites, on a status transition) one intervention record
+   * to evidence/<run_id>/interventions/<intervention_id>.yaml. Interventions
+   * carry input values and page context, same redaction rules as everything
+   * else this writer produces — routed through the same Redactor, no
+   * separate path to disk.
+   */
+  async writeIntervention(record: InterventionRecord): Promise<string> {
+    const dir = join(this.runDir, "interventions");
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${record.intervention_id}.yaml`);
+    const scrubbed = this.redactor.scrub(record);
+    await writeFile(path, yaml.dump(scrubbed), "utf8");
+    return path;
   }
 }

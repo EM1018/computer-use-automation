@@ -28,7 +28,14 @@ export interface PolicyConfig {
   allowedBaseUrls: string[];
   /** Action types the engine is permitted to execute. Defaults to all declared actions. */
   allowedActions?: string[];
-  /** Must be explicitly true for a run containing any risk: "irreversible" step to proceed. */
+  /**
+   * Must be explicitly true for automation to execute a risk: "irreversible"
+   * step unattended. Checked at the moment the engine is about to run that
+   * step (not at preflight, before any browser exists) — see the
+   * "policy_block" escalation trigger in ./escalation.ts — because refusing
+   * it needs to hand a human the same live, already-authenticated session,
+   * which preflight cannot do since no session exists yet at that point.
+   */
   confirmIrreversible?: boolean;
   /** Unattended runs require capability.status === "approved". Defaults to true. */
   unattended?: boolean;
@@ -38,3 +45,23 @@ export interface PolicyConfig {
 
 /** Ceiling on total recoverable applications across an entire run, regardless of which recoverable. */
 export const GLOBAL_RECOVERY_CAP = 5;
+
+/**
+ * How long a session may sit in PENDING_INTERVENTION (escalated, but no
+ * human has claimed it yet) before the run is terminated. Sessions that
+ * never die are a real production problem, so this always has a value.
+ */
+export const DEFAULT_PENDING_INTERVENTION_TTL_MS = 15 * 60 * 1000;
+
+/** How long a session may sit in HUMAN_CONTROL before the run is failed and the session closed. */
+export const DEFAULT_HUMAN_CONTROL_TTL_MS = 60 * 60 * 1000;
+
+export interface EscalationTtlConfig {
+  pendingInterventionTtlMs: number;
+  humanControlTtlMs: number;
+}
+
+export const DEFAULT_ESCALATION_TTL: EscalationTtlConfig = {
+  pendingInterventionTtlMs: DEFAULT_PENDING_INTERVENTION_TTL_MS,
+  humanControlTtlMs: DEFAULT_HUMAN_CONTROL_TTL_MS,
+};
