@@ -54,6 +54,7 @@ import {
   buildInterventionRecord,
   deriveResumeContract,
   escalationRegistry,
+  terminateAndCloseSession,
   verifyResume,
   type EscalationHandle,
 } from "./escalation.js";
@@ -102,7 +103,7 @@ export async function replay(
   }
 
   const session = await getSession();
-  const redactor = new Redactor(artifact, pre.values);
+  const redactor = new Redactor(artifact.inputs, pre.values);
   redactor.registerValue(process.env["FCU_OPERATOR_USER"]);
   redactor.registerValue(process.env["FCU_OPERATOR_PASS"]);
   const evidence = new EvidenceWriter(options.evidenceRoot ?? "evidence", runId, redactor);
@@ -306,7 +307,8 @@ async function startEscalation(
   const record = buildInterventionRecord({
     session: ctx.session,
     runId: ctx.runId,
-    artifact: ctx.artifact,
+    capability: `${ctx.artifact.capability.id}@${ctx.artifact.capability.version.major}.${ctx.artifact.capability.version.minor}`,
+    goal: ctx.artifact.capability.description,
     trigger,
     detail,
     currentStep: step.id,
@@ -327,7 +329,7 @@ async function startEscalation(
   });
 
   ctx.session.beginEscalation();
-  const handle: EscalationHandle = { session: ctx.session, evidence, artifact: ctx.artifact, record };
+  const handle: EscalationHandle = { session: ctx.session, evidence, record };
   escalationRegistry.register(handle);
 
   void continueAfterEscalation(ctx, evidence, policy, handle, ttl).catch((err: unknown) => {
@@ -388,9 +390,7 @@ async function continueAfterEscalation(
     escalationRegistry.remove(interventionId);
     const terminal: EscalationTimeoutResult = { status: "escalation_timeout", intervention_id: interventionId, run_id: ctx.runId };
     await finalizeTerminal(ctx, evidence, terminal);
-    session.terminate();
-    await session.close().catch(() => undefined);
-    await session.browser.close().catch(() => undefined);
+    await terminateAndCloseSession(session);
     return;
   }
 
@@ -416,9 +416,7 @@ async function continueAfterEscalation(
     };
     await finalizeTerminal(ctx, evidence, terminal);
     session.reclaim();
-    session.terminate();
-    await session.close().catch(() => undefined);
-    await session.browser.close().catch(() => undefined);
+    await terminateAndCloseSession(session);
     return;
   }
 

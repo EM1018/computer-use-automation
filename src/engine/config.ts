@@ -41,6 +41,22 @@ export interface PolicyConfig {
   unattended?: boolean;
   /** Dev-only escape hatch: permits an unattended run of a non-approved (draft) artifact. Defaults to false. */
   allowDraft?: boolean;
+  /**
+   * Elements discovery must refuse to act on unless `confirmIrreversible` is
+   * set — declarative, matched by accessible role/name against whatever the
+   * live accessibility snapshot says, since discovery has no artifact
+   * step.risk to key off yet (that's assigned later, by the not-yet-built
+   * compiler). Matched by src/discovery/policy.ts; unused by replay, which
+   * has its own artifact-step-level check in ./policy.ts.
+   */
+  irreversibleTargets?: IrreversibleTargetPattern[];
+}
+
+export interface IrreversibleTargetPattern {
+  /** Accessible role to match, e.g. "button". Omit to match any role. */
+  role?: string;
+  /** Regex (as a string) tested against the accessible name. Omit to match any name. */
+  namePattern?: string;
 }
 
 /** Ceiling on total recoverable applications across an entire run, regardless of which recoverable. */

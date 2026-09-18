@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "dotenv/config";
 import { join } from "node:path";
 import { loadArtifact, resolveCapability } from "../loader.js";
 import { replay } from "../engine/replay.js";

@@ -23,6 +23,7 @@
  * stop waiting and print the result, not a substitute for a real condition
  * check inside the engine.
  */
+import "dotenv/config";
 import { type ChildProcess, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";

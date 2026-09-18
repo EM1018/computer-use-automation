@@ -163,7 +163,7 @@ describe("human-in-the-loop escalation", () => {
     const artifact = loadExampleArtifact(server.baseUrl);
     const evidenceRoot = tmpEvidenceRoot();
     const runId = "intervention-redaction";
-    const redactor = new Redactor(artifact, { member_id: "10001" });
+    const redactor = new Redactor(artifact.inputs, { member_id: "10001" });
     const evidence = new EvidenceWriter(evidenceRoot, runId, redactor);
 
     const record: InterventionRecord = {
@@ -203,13 +203,12 @@ describe("human-in-the-loop escalation", () => {
     const session = await getSession();
     const artifact = loadExampleArtifact(server.baseUrl);
     const evidenceRoot = tmpEvidenceRoot();
-    const evidence = new EvidenceWriter(evidenceRoot, "claim-test", new Redactor(artifact, {}));
+    const evidence = new EvidenceWriter(evidenceRoot, "claim-test", new Redactor(artifact.inputs, {}));
 
     session.beginEscalation();
     const handle = {
       session,
       evidence,
-      artifact,
       record: {
         intervention_id: "claim-test-intervention",
         session_id: session.id,

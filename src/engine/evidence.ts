@@ -5,6 +5,7 @@ import type { Page } from "playwright";
 import type { Action, Strategy } from "../schema/capability.js";
 import type { CapabilityResult } from "../schema/result.js";
 import type { InterventionRecord } from "../schema/intervention.js";
+import type { ActionLogEntry, PolicyEventEntry, RefsLogEntry, TranscriptTurnEntry } from "../schema/discovery.js";
 import type { Redactor } from "./redactor.js";
 import type { Controller } from "./session.js";
 
@@ -85,6 +86,52 @@ export class EvidenceWriter {
     const path = join(dir, `${record.intervention_id}.yaml`);
     const scrubbed = this.redactor.scrub(record);
     await writeFile(path, yaml.dump(scrubbed), "utf8");
+    return path;
+  }
+
+  // -------------------------------------------------------------------------
+  // Discovery's transcript files — same evidence/<run_id>/ root, same
+  // Redactor chokepoint, no separate writer class. Input values supplied at
+  // discovery launch are sensitive by construction (see
+  // src/discovery/loop.ts's Redactor setup) and get scrubbed here exactly
+  // like everything else.
+  // -------------------------------------------------------------------------
+
+  async writeTranscriptTurn(entry: TranscriptTurnEntry): Promise<void> {
+    await this.ensureDir();
+    const scrubbed = this.redactor.scrub(entry);
+    await appendFile(join(this.runDir, "transcript.jsonl"), `${JSON.stringify(scrubbed)}\n`, "utf8");
+  }
+
+  async writeAction(entry: ActionLogEntry): Promise<void> {
+    await this.ensureDir();
+    const scrubbed = this.redactor.scrub(entry);
+    await appendFile(join(this.runDir, "actions.jsonl"), `${JSON.stringify(scrubbed)}\n`, "utf8");
+  }
+
+  async writePolicyEvent(entry: PolicyEventEntry): Promise<void> {
+    await this.ensureDir();
+    const scrubbed = this.redactor.scrub(entry);
+    await appendFile(join(this.runDir, "policy_events.jsonl"), `${JSON.stringify(scrubbed)}\n`, "utf8");
+  }
+
+  async writeRefs(entry: RefsLogEntry): Promise<void> {
+    await this.ensureDir();
+    const scrubbed = this.redactor.scrub(entry);
+    await appendFile(join(this.runDir, "refs.jsonl"), `${JSON.stringify(scrubbed)}\n`, "utf8");
+  }
+
+  /** Path helper only, no I/O — lets a caller reference a turn's screenshot (e.g. for an intervention record) without retaking it. */
+  turnScreenshotPath(turn: number): string {
+    return join(this.runDir, "screenshots", `turn_${turn}.png`);
+  }
+
+  async writeTurnScreenshot(turn: number, page: Page): Promise<string> {
+    await this.ensureDir();
+    const dir = join(this.runDir, "screenshots");
+    await mkdir(dir, { recursive: true });
+    const path = this.turnScreenshotPath(turn);
+    await page.screenshot({ path });
     return path;
   }
 }

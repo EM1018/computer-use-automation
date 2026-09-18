@@ -1,4 +1,4 @@
-import type { CapabilityArtifact } from "../schema/capability.js";
+import type { Sensitivity } from "../schema/capability.js";
 
 // A conservative backstop for value shapes that commonly identify a person
 // or account even when the artifact itself didn't tag the field: US SSNs,
@@ -22,10 +22,21 @@ const REDACTED = "[REDACTED]";
 export class Redactor {
   private readonly sensitiveValues: Set<string>;
 
-  constructor(artifact: CapabilityArtifact, invocationInputs: Record<string, string | number | boolean>) {
+  /**
+   * Takes just the input DECLARATIONS (name + optional sensitivity tag),
+   * not a whole CapabilityArtifact — the only thing this ever needed from
+   * one. Generalized so callers that have no artifact at all (discovery has
+   * a goal and launch inputs, not a capability yet) can still build a
+   * Redactor without constructing a fake one just to satisfy this
+   * constructor's shape.
+   */
+  constructor(
+    inputDeclarations: ReadonlyArray<{ name: string; sensitivity?: Sensitivity | undefined }>,
+    invocationInputs: Record<string, string | number | boolean>,
+  ) {
     this.sensitiveValues = new Set<string>();
 
-    for (const input of artifact.inputs) {
+    for (const input of inputDeclarations) {
       if (input.sensitivity && input.name in invocationInputs) {
         this.registerValue(invocationInputs[input.name]);
       }

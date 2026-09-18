@@ -162,7 +162,10 @@ export async function verifyResume(
 export function buildInterventionRecord(params: {
   session: Session;
   runId: string;
-  artifact: CapabilityArtifact;
+  /** e.g. "<capability_id>@<major>.<minor>" for a replay run, or "discovery" before any artifact exists. */
+  capability: string;
+  /** The artifact's description for replay; the operator-stated goal for discovery. */
+  goal: string;
   trigger: EscalationTrigger;
   detail: string;
   currentStep: string;
@@ -174,11 +177,8 @@ export function buildInterventionRecord(params: {
 }): InterventionRecord {
   const now = params.now ?? (() => new Date());
   const context: InterventionContext = {
-    capability: `${params.artifact.capability.id}@${params.artifact.capability.version.major}.${params.artifact.capability.version.minor}`,
-    // Discovery (which would carry an agent-stated goal) doesn't exist yet;
-    // the artifact's own description is the closest current stand-in for
-    // "what is this run trying to accomplish".
-    goal: params.artifact.capability.description,
+    capability: params.capability,
+    goal: params.goal,
     current_step: params.currentStep,
     steps_completed: params.stepsCompleted,
     current_url: params.currentUrl,
@@ -208,7 +208,6 @@ export function buildInterventionRecord(params: {
 export interface EscalationHandle {
   session: Session;
   evidence: EvidenceWriter;
-  artifact: CapabilityArtifact;
   record: InterventionRecord;
 }
 
@@ -240,6 +239,13 @@ export class EscalationRegistry {
 /** One registry per process — the operator HTTP server and the replay engine both need to reach the same live handles. */
 export const escalationRegistry = new EscalationRegistry();
 
+/** Shared teardown for every path that ends a session for good (abandon, either TTL expiry) — one definition of "closed", not three copies of the same three calls. */
+export async function terminateAndCloseSession(session: Session): Promise<void> {
+  session.terminate();
+  await session.close().catch(() => undefined);
+  await session.browser.close().catch(() => undefined);
+}
+
 // ---------------------------------------------------------------------------
 // Operator actions — the only code paths allowed to mutate a handle's
 // record status, so "what does status X actually do" has one definition.
@@ -267,11 +273,21 @@ export async function resumeIntervention(handle: EscalationHandle): Promise<void
 
 /**
  * Terminates the run outright. This has to write a real terminal result —
- * not just update the intervention record's own status — because the run's
- * only externally-visible outcome is evidence/result.json, and it was still
- * sitting at the initial "escalated" write. Leaving it there would mean
- * anything waiting on this run (a caller polling result.json, the demo
- * script) blocks forever with no way to learn the run is actually over.
+ * not just update the intervention record's own status — because a
+ * fire-and-forget caller's only externally-visible signal is
+ * evidence/result.json, and it was still sitting at the initial "escalated"
+ * write. Leaving it there would mean anything waiting on this run (a caller
+ * polling result.json, the demo script) blocks forever with no way to learn
+ * the run is actually over.
+ *
+ * Deliberately generic and shared across replay AND discovery — the
+ * operator surface calls this against whatever's in the registry without
+ * knowing which produced it, so this writes a best-effort "abandoned"
+ * breadcrumb in replay's CapabilityResult shape either way. A discovery run
+ * additionally builds its own richer DiscoveryResult directly (it awaits
+ * this in-process rather than firing-and-forgetting), so for discovery this
+ * write is a generic marker for external tooling, not the authoritative
+ * outcome the way it is for replay.
  */
 export async function abandonIntervention(handle: EscalationHandle): Promise<void> {
   handle.record = { ...handle.record, status: "abandoned" };
@@ -293,9 +309,7 @@ export async function abandonIntervention(handle: EscalationHandle): Promise<voi
   await handle.session.context.tracing.stop({ path: handle.evidence.tracePath() }).catch(() => undefined);
   await handle.evidence.writeResult(terminal);
 
-  handle.session.terminate();
-  await handle.session.close().catch(() => undefined);
-  await handle.session.browser.close().catch(() => undefined);
+  await terminateAndCloseSession(handle.session);
 }
 
 // ---------------------------------------------------------------------------

@@ -9,9 +9,14 @@
     "test": "vitest run",
     "generate:schema": "tsx src/generate-schema.ts",
     "replay": "tsx src/cli/replay.ts",
-    "demo:escalation": "tsx src/demo/escalation.ts"
+    "demo:escalation": "tsx src/demo/escalation.ts",
+    "discover": "tsx src/cli/discover.ts",
+    "test:discovery": "vitest run --config vitest.discovery.config.ts",
+    "discover:e2e": "tsx src/demo/discover-e2e.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.126.0",
+    "dotenv": "^17.4.2",
     "js-yaml": "^4.1.0",
     "zod": "^3.23.8",
     "zod-to-json-schema": "^3.23.5"

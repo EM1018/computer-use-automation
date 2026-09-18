@@ -5,10 +5,21 @@ import { describe, expect, it } from "vitest";
 // The engine is a generic interpreter: it knows about steps, strategies,
 // checkpoints, and outcomes as shapes, never about what any particular
 // artifact's fields mean. This test enforces that mechanically rather than
-// by convention — engine and CLI source must never mention the business
-// domain the example artifact happens to target.
+// by convention — engine, discovery, operator, and CLI source must never
+// mention the business domain the example artifact happens to target.
+// Discovery is held to the same standard for the same reason replay is: it
+// operates against a goal and a live page, never hardcoded knowledge of
+// what a "member" or "balance" is. (cli/discover.ts's hardcoded
+// irreversibleTargets pattern, "Close Account", is app WIRING — like
+// cli/replay.ts's login selectors — not business-domain knowledge, and
+// doesn't trip this list anyway.)
 const FORBIDDEN_WORDS = ["member", "balance", "savings", "credit union"];
-const SCAN_ROOTS = [join(process.cwd(), "src", "engine"), join(process.cwd(), "src", "cli")];
+const SCAN_ROOTS = [
+  join(process.cwd(), "src", "engine"),
+  join(process.cwd(), "src", "cli"),
+  join(process.cwd(), "src", "discovery"),
+  join(process.cwd(), "src", "operator"),
+];
 
 function listTsFiles(dir: string): string[] {
   const out: string[] = [];
