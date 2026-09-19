@@ -12,13 +12,16 @@
  * resolvable via `page.locator('aria-ref=f2e14')` even across iframes with
  * no manual frame-scoping needed). The model only ever sees "e1".."eN"; it
  * cannot emit a selector or coordinates because there is no field for one.
- * Deriving a durable locator strategy from the chosen element is the
- * compiler's job (not built here) — this only needs to resolve the CURRENT
- * live element for the CURRENT turn.
+ *
+ * Each ref also carries an ENRICHED descriptor (tag, attributes, label
+ * association, frame identity, nearby text, bounding box) beyond what the
+ * model sees in the prompt — that's for the compiler (not built here),
+ * which derives durable locator strategies (role_name, label, attribute,
+ * text_anchored, coordinates) from this data after the run.
  */
 
 import type { Locator, Page } from "playwright";
-import type { RefDescriptor } from "../schema/discovery.js";
+import type { BoundingBox, FrameDescriptor, NearbyText, RefAttributes, RefDescriptor, ViewportSize } from "../schema/discovery.js";
 
 // Roles a human (or model) can act on directly.
 const INTERACTIVE_ROLES = new Set([
@@ -60,6 +63,7 @@ interface AriaNode {
   pressed?: unknown;
   selected?: unknown;
   level?: unknown;
+  box?: unknown;
 }
 
 function asString(value: unknown): string | undefined {
@@ -78,11 +82,66 @@ function isInteractive(role: string): boolean {
   return INTERACTIVE_ROLES.has(role);
 }
 
+function asBoundingBox(value: unknown): BoundingBox | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const v = value as Record<string, unknown>;
+  if (typeof v["x"] === "number" && typeof v["y"] === "number" && typeof v["width"] === "number" && typeof v["height"] === "number") {
+    return { x: v["x"], y: v["y"], width: v["width"], height: v["height"] };
+  }
+  return undefined;
+}
+
+function isHeaderRow(row: AriaNode): boolean {
+  const cells = childrenOf(row);
+  return cells.length > 0 && cells.every((cell) => asString(cell.role) === "columnheader" || asString(cell.role) === "rowheader");
+}
+
 interface WalkState {
   nextRefIndex: number;
   lines: string[];
   refs: RefDescriptor[];
   refToPlaywrightRef: Map<string, string>;
+}
+
+/** Table/row positioning context threaded down through the walk, for nearbyText — established at the rowgroup/table level (columnHeaders) and the row level (rowFirstCell, this cell's index). */
+interface TableContext {
+  columnHeaders: string[];
+}
+interface RowContext {
+  rowFirstCellText: string | undefined;
+  cellIndex: number;
+}
+interface WalkPosition {
+  siblings: AriaNode[];
+  index: number;
+  table?: TableContext | undefined;
+  row?: RowContext | undefined;
+}
+
+function buildNearbyText(pos: WalkPosition): NearbyText | undefined {
+  const result: NearbyText = {};
+  if (pos.row) {
+    const columnHeader = pos.table?.columnHeaders[pos.row.cellIndex];
+    if (columnHeader) {
+      result.columnHeader = columnHeader;
+    }
+    if (pos.row.rowFirstCellText) {
+      result.rowFirstCell = pos.row.rowFirstCellText;
+    }
+  }
+  const prevSibling = pos.index > 0 ? pos.siblings[pos.index - 1] : undefined;
+  const nextSibling = pos.index < pos.siblings.length - 1 ? pos.siblings[pos.index + 1] : undefined;
+  const prevText = prevSibling ? label(prevSibling) : undefined;
+  const nextText = nextSibling ? label(nextSibling) : undefined;
+  if (prevText) {
+    result.precedingSibling = prevText;
+  }
+  if (nextText) {
+    result.followingSibling = nextText;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 /** True if this node or any descendant would get a ref — gates whether a structural scaffold line is worth printing at all. */
@@ -108,10 +167,6 @@ function collapseRows(node: AriaNode): { children: AriaNode[]; omittedNote: stri
     return { children, omittedNote: undefined };
   }
 
-  const isHeaderRow = (row: AriaNode): boolean => {
-    const cells = childrenOf(row);
-    return cells.length > 0 && cells.every((cell) => asString(cell.role) === "columnheader" || asString(cell.role) === "rowheader");
-  };
   const headerRows = rowChildren.filter(isHeaderRow);
   const dataRows = rowChildren.filter((r) => !isHeaderRow(r));
   const shownData = dataRows.slice(0, MAX_ROWS_SHOWN);
@@ -141,7 +196,7 @@ function renderAttributes(node: AriaNode): string {
   return parts.length > 0 ? ` [${parts.join(", ")}]` : "";
 }
 
-function walk(node: AriaNode, depth: number, state: WalkState): void {
+function walk(node: AriaNode, depth: number, state: WalkState, pos: WalkPosition): void {
   const role = asString(node.role) ?? "generic";
   const text = label(node);
   const keep = isInteractive(role) || text !== undefined;
@@ -165,6 +220,14 @@ function walk(node: AriaNode, depth: number, state: WalkState): void {
     if (text !== undefined) {
       descriptor.name = text;
     }
+    const nearbyText = buildNearbyText(pos);
+    if (nearbyText) {
+      descriptor.nearbyText = nearbyText;
+    }
+    const box = asBoundingBox(node.box);
+    if (box) {
+      descriptor.boundingBox = box;
+    }
     state.refs.push(descriptor);
     state.refToPlaywrightRef.set(ref, playwrightRef);
 
@@ -174,12 +237,67 @@ function walk(node: AriaNode, depth: number, state: WalkState): void {
     state.lines.push(`${indent}- ${role}${suffix}`);
   }
 
-  const childDepth = keep || SCAFFOLD_ROLES.has(role) ? depth + 1 : depth;
-  for (const child of children) {
-    walk(child, childDepth, state);
+  // A rowgroup/table establishes column headers for its descendant rows'
+  // cells; every other role just passes the enclosing table context
+  // through unchanged (so it survives table -> rowgroup -> row -> cell).
+  let childTable = pos.table;
+  if (role === "rowgroup" || role === "table") {
+    const headerRow = children.find((c) => asString(c.role) === "row" && isHeaderRow(c));
+    if (headerRow) {
+      childTable = { columnHeaders: childrenOf(headerRow).map((cell) => label(cell) ?? "") };
+    }
   }
+
+  const childDepth = keep || SCAFFOLD_ROLES.has(role) ? depth + 1 : depth;
+  children.forEach((child, index) => {
+    let childRow = pos.row;
+    if (role === "row") {
+      childRow = { rowFirstCellText: label(children[0] as AriaNode), cellIndex: index };
+    }
+    walk(child, childDepth, state, { siblings: children, index, table: childTable, row: childRow });
+  });
   if (omittedNote) {
     state.lines.push(`${"  ".repeat(childDepth)}- ${omittedNote}`);
+  }
+}
+
+/** Tag, HTML attributes, and real <label> association — read directly from the DOM since none of it is in the accessibility tree. */
+async function readDomInfo(locator: Locator): Promise<{ tag: string; attributes: RefAttributes; hasLabel: boolean; labelText: string | undefined }> {
+  return locator.evaluate((el) => {
+    const attributeNames = ["name", "id", "class", "type", "placeholder"] as const;
+    const attributes: Record<string, string> = {};
+    for (const attr of attributeNames) {
+      const value = el.getAttribute(attr);
+      if (value) {
+        attributes[attr] = value;
+      }
+    }
+    const id = el.getAttribute("id");
+    let labelEl: HTMLLabelElement | null = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
+    labelEl ??= el.closest("label");
+    return {
+      tag: el.tagName.toLowerCase(),
+      attributes,
+      hasLabel: labelEl !== null,
+      labelText: labelEl?.textContent?.trim() || undefined,
+    };
+  });
+}
+
+/** The real Frame object that owns this element, via ElementHandle.ownerFrame() — never inferred from playwrightRef's internal "f2e28" numbering. */
+async function readOwnerFrame(locator: Locator, page: Page): Promise<FrameDescriptor | undefined> {
+  const handle = await locator.elementHandle();
+  if (!handle) {
+    return undefined;
+  }
+  try {
+    const frame = await handle.ownerFrame();
+    if (!frame) {
+      return undefined;
+    }
+    return { name: frame.name(), url: frame.url(), index: page.frames().indexOf(frame) };
+  } finally {
+    await handle.dispose().catch(() => undefined);
   }
 }
 
@@ -199,13 +317,13 @@ export interface ObserveResult {
 }
 
 export async function observe(page: Page): Promise<ObserveResult> {
-  const rawJson: unknown = await page.ariaSnapshotJSON({ mode: "ai" });
+  const rawJson: unknown = await page.ariaSnapshotJSON({ mode: "ai", boxes: true });
   const roots = Array.isArray(rawJson) ? (rawJson as AriaNode[]) : [];
 
   const state: WalkState = { nextRefIndex: 1, lines: [], refs: [], refToPlaywrightRef: new Map() };
-  for (const root of roots) {
-    walk(root, 0, state);
-  }
+  roots.forEach((root, index) => {
+    walk(root, 0, state, { siblings: roots, index });
+  });
 
   const refMap = new Map<string, Locator>();
   for (const [ref, playwrightRef] of state.refToPlaywrightRef) {
@@ -213,6 +331,40 @@ export async function observe(page: Page): Promise<ObserveResult> {
       refMap.set(ref, page.locator(`aria-ref=${playwrightRef}`));
     }
   }
+
+  const viewport: ViewportSize | undefined = page.viewportSize() ?? undefined;
+
+  // Enrichment is a best-effort second pass, in parallel across refs: a
+  // single stale/vanished element must not take down the whole turn's
+  // observation, so each lookup is caught independently.
+  await Promise.all(
+    state.refs.map(async (descriptor) => {
+      const locator = refMap.get(descriptor.ref);
+      if (!locator) {
+        return;
+      }
+      const [domInfo, frame] = await Promise.all([
+        readDomInfo(locator).catch(() => undefined),
+        readOwnerFrame(locator, page).catch(() => undefined),
+      ]);
+      if (domInfo) {
+        descriptor.tag = domInfo.tag;
+        if (Object.keys(domInfo.attributes).length > 0) {
+          descriptor.attributes = domInfo.attributes;
+        }
+        descriptor.hasLabel = domInfo.hasLabel;
+        if (domInfo.labelText) {
+          descriptor.labelText = domInfo.labelText;
+        }
+      }
+      if (frame) {
+        descriptor.frame = frame;
+      }
+      if (viewport) {
+        descriptor.viewport = viewport;
+      }
+    }),
+  );
 
   const screenshot = await page.screenshot({ type: "png" });
 

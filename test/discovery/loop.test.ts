@@ -1,10 +1,16 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeAll, afterAll, describe, expect, it } from "vitest";
 import { runDiscovery } from "../../src/discovery/loop.js";
 import { DiscoveryHistory } from "../../src/discovery/history.js";
+import { observe } from "../../src/discovery/observe.js";
 import { abandonIntervention, escalationRegistry } from "../../src/engine/escalation.js";
+import { EvidenceWriter } from "../../src/engine/evidence.js";
+import { Redactor } from "../../src/engine/redactor.js";
 import { SessionFactory, type Session } from "../../src/engine/session.js";
 import type { PolicyConfig, AppConfig } from "../../src/engine/config.js";
-import type { DiscoveryAction } from "../../src/schema/discovery.js";
+import type { DiscoveryAction, RefDescriptor } from "../../src/schema/discovery.js";
 import type { ModelClient, NextActionParams, ModelDecision } from "../../src/discovery/model.js";
 import { OPERATOR_PASS, OPERATOR_USER, startFlaskServer, type FlaskServer } from "../helpers/flask-server.js";
 
@@ -238,6 +244,61 @@ describe("discovery loop (mocked model, real app and browser)", () => {
     expect(model.calls[1]?.observation).toBe(model.calls[0]?.observation);
     expect(model.calls[1]?.retryFeedback).toContain("e_this_ref_does_not_exist");
   }, 20000);
+
+  it("ref descriptors carry the enriched shape the compiler needs, not just role/name", async () => {
+    const session = await getSession();
+    await session.page.goto(`${server.baseUrl}/member/10001`);
+    const { observation } = await observe(session.page);
+
+    // A labeled, top-level form field: attribute + label strategies should
+    // both be derivable, and it should be attributed to the TOP frame.
+    const memberIdCell = observation.refs.find((r) => r.role === "cell" && r.name === "Member ID");
+    expect(memberIdCell).toBeDefined();
+
+    // The balance cell: no id, no label — only findable via nearbyText, the
+    // whole reason this enrichment exists. It's also INSIDE the iframe.
+    const balanceCell = observation.refs.find((r) => r.name === "$2,450.10");
+    expect(balanceCell).toBeDefined();
+    expect(balanceCell?.tag).toBe("td");
+    expect(balanceCell?.hasLabel).toBe(false);
+    expect(balanceCell?.nearbyText?.columnHeader).toBe("Balance");
+    expect(balanceCell?.nearbyText?.rowFirstCell).toBe("Savings");
+    expect(balanceCell?.boundingBox).toMatchObject({ x: expect.any(Number), y: expect.any(Number), width: expect.any(Number), height: expect.any(Number) });
+    expect(balanceCell?.viewport).toMatchObject({ width: expect.any(Number), height: expect.any(Number) });
+    expect(balanceCell?.frame?.url).toContain("/panel");
+
+    // A real <label for> field and a plain attribute-only control, both on
+    // the top-level page — frame.index must differ from the iframe's.
+    const closeButton = observation.refs.find((r) => r.name === "Close Account");
+    expect(closeButton).toBeDefined();
+    expect(closeButton?.tag).toBe("input");
+    expect(closeButton?.attributes?.type).toBe("submit");
+    expect(closeButton?.frame?.index).not.toBe(balanceCell?.frame?.index);
+  }, 20000);
+
+  it("the enriched descriptor fields are redacted the same as everything else in refs.jsonl", async () => {
+    const evidenceRoot = mkdtempSync(join(tmpdir(), "evidence-discovery-redaction-"));
+    const runId = "refs-redaction";
+    const redactor = new Redactor([{ name: "member_id", sensitivity: "pii" }], { member_id: "10001" });
+    const evidence = new EvidenceWriter(evidenceRoot, runId, redactor);
+
+    const descriptor: RefDescriptor = {
+      ref: "e14",
+      role: "cell",
+      name: "10001",
+      playwrightRef: "f3e7",
+      tag: "td",
+      attributes: { id: "10001", class: "cell-10001" },
+      nearbyText: { rowFirstCell: "Member 10001", columnHeader: "ID" },
+    };
+    await evidence.writeRefs({ turn: 0, refs: [descriptor] });
+
+    const raw = readFileSync(join(evidenceRoot, runId, "refs.jsonl"), "utf8");
+    expect(raw).not.toContain("10001");
+    expect(raw).toContain("[REDACTED]");
+
+    rmSync(evidenceRoot, { recursive: true, force: true });
+  });
 });
 
 describe("DiscoveryHistory", () => {

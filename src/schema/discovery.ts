@@ -38,13 +38,78 @@ export function isRefTargetingAction(action: DiscoveryAction): action is RefTarg
   return action.action === "click" || action.action === "fill" || action.action === "select" || action.action === "extract";
 }
 
-/** Serializable metadata for one ref, independent of any live Playwright handle — what refs.jsonl records and what the policy check matches against. */
+export interface RefAttributes {
+  name?: string;
+  id?: string;
+  class?: string;
+  type?: string;
+  placeholder?: string;
+}
+
+/**
+ * Which live frame this ref's element sits in — captured from Playwright's
+ * own Frame object (ElementHandle.ownerFrame()), never parsed out of
+ * playwrightRef's "f2e28"-style string. That string is an internal
+ * Playwright snapshot-numbering format with no documented stability
+ * guarantee; `index` here is instead this frame's position in
+ * page.frames(), a real, public API.
+ */
+export interface FrameDescriptor {
+  name: string;
+  url: string;
+  index: number;
+}
+
+/**
+ * What's around this element in the page, for text_anchored targeting —
+ * the only strategy that can find an element with no label and no stable
+ * attribute, such as a table cell identified only by "the cell in the same
+ * row as the one that says X". `rowFirstCell`/`columnHeader` apply to table
+ * cells; `precedingSibling`/`followingSibling` are a more general fallback
+ * for anything else with informative neighbors.
+ */
+export interface NearbyText {
+  rowFirstCell?: string;
+  columnHeader?: string;
+  precedingSibling?: string;
+  followingSibling?: string;
+}
+
+export interface BoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ViewportSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * Serializable metadata for one ref, independent of any live Playwright
+ * handle — what refs.jsonl records and what the compiler (not built here)
+ * will derive locator strategies from after the run. Each block below maps
+ * to one of the four strategy kinds replay's Strategy schema supports (see
+ * src/schema/capability.ts): role+name -> role_name, hasLabel/labelText ->
+ * label, tag+attributes -> attribute, nearbyText -> text_anchored.
+ * boundingBox+viewport back a coordinates strategy, the last resort.
+ */
 export interface RefDescriptor {
   ref: string;
   role: string;
   name?: string;
   /** Playwright's own aria-ref locator string (e.g. "f2e28") this ref resolves to — an implementation detail, but worth keeping for debugging. */
   playwrightRef: string;
+  tag?: string;
+  attributes?: RefAttributes;
+  hasLabel?: boolean;
+  labelText?: string;
+  frame?: FrameDescriptor;
+  nearbyText?: NearbyText;
+  boundingBox?: BoundingBox;
+  viewport?: ViewportSize;
 }
 
 export type StoppingCondition =
