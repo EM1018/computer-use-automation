@@ -194,7 +194,7 @@ describe("human-in-the-loop escalation", () => {
     expect(raw).not.toContain("10001");
     // Confirms the pii-tagged value really would have appeared had the
     // Redactor not scrubbed it — otherwise the assertion above passes vacuously.
-    expect(raw).toContain("[REDACTED]");
+    expect(raw).toContain("[REDACTED:member_id]");
 
     rmSync(evidenceRoot, { recursive: true, force: true });
   });

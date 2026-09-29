@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, afterAll, describe, expect, it } from "vitest";
@@ -295,10 +295,48 @@ describe("discovery loop (mocked model, real app and browser)", () => {
 
     const raw = readFileSync(join(evidenceRoot, runId, "refs.jsonl"), "utf8");
     expect(raw).not.toContain("10001");
-    expect(raw).toContain("[REDACTED]");
+    expect(raw).toContain("[REDACTED:member_id]");
 
     rmSync(evidenceRoot, { recursive: true, force: true });
   });
+
+  it("no raw input value appears anywhere under evidence/ after a real discovery run, launch.json included", async () => {
+    const session = await getSession();
+    const evidenceRoot = mkdtempSync(join(tmpdir(), "evidence-discovery-no-raw-values-"));
+    const runId = "no-raw-values";
+    const model = new ScriptedModelClient([
+      (params) => ({ action: "fill", ref: mustFindRef(params, "textbox", "Member ID"), value: "10001" }),
+      (params) => ({ action: "click", ref: mustFindRef(params, "button", "Search") }),
+      () => ({ action: "done", reason: "member located" }),
+    ]);
+
+    const result = await runDiscovery(session, "Look up a member's accounts", { member_id: "10001" }, policy, model, {
+      runId,
+      evidenceRoot,
+      maxSteps: 10,
+    });
+    expect(result.status).toBe("goal_reached");
+
+    const files = readdirSync(join(evidenceRoot, runId), { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => join(entry.parentPath, entry.name));
+    expect(files.length).toBeGreaterThan(0);
+    // launch.json specifically — the file that used to bypass the Redactor
+    // entirely — is included by this walk, not special-cased around.
+    expect(files.some((f) => f.endsWith("launch.json"))).toBe(true);
+
+    for (const file of files) {
+      if (file.endsWith(".png") || file.endsWith(".zip")) continue; // binary evidence (screenshots/traces), not text-scannable
+      const content = readFileSync(file, "utf8");
+      expect(content, `${file} should not contain the raw member_id`).not.toContain("10001");
+    }
+
+    const launchRaw = readFileSync(join(evidenceRoot, runId, "launch.json"), "utf8");
+    expect(launchRaw).toContain("member_id"); // the NAME survives — only the value is scrubbed
+    expect(launchRaw).toContain("[REDACTED:member_id]");
+
+    rmSync(evidenceRoot, { recursive: true, force: true });
+  }, 20000);
 });
 
 describe("DiscoveryHistory", () => {

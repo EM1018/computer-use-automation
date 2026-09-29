@@ -578,6 +578,13 @@
                   "status"
                 ],
                 "additionalProperties": false
+              },
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "probed",
+                  "hand_declared"
+                ]
               }
             },
             "required": [
@@ -710,6 +717,13 @@
             "run"
           ],
           "additionalProperties": false
+        },
+        "compiler_notes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "required": [

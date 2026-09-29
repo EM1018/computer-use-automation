@@ -140,9 +140,18 @@ export interface DiscoveryResult {
 
 export type TurnResult = "ok" | "blocked" | "invalid_ref" | "error";
 
-/** transcript.jsonl — one line per turn, the primary evidence record. */
+/**
+ * transcript.jsonl — one line per turn, the primary evidence record.
+ *
+ * `url` is the page URL this turn's observation was taken against (i.e. the
+ * state BEFORE `action` executes) — added specifically for the compiler
+ * (src/compiler/prune.ts), which needs a cheap, comparable "what state was
+ * this" signature per turn to detect a subsequence that looped back to an
+ * earlier state. Nothing else reads it.
+ */
 export interface TranscriptTurnEntry {
   turn: number;
+  url: string;
   observation_summary: string;
   model_reasoning: string;
   action: DiscoveryAction;

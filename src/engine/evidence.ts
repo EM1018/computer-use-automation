@@ -97,6 +97,24 @@ export class EvidenceWriter {
   // like everything else.
   // -------------------------------------------------------------------------
 
+  /**
+   * Writes launch.json — the run's goal and its input NAMES, scrubbed
+   * through the Redactor exactly like every other writer on this class. A
+   * value that matches a registered secret comes out as a LABELED
+   * placeholder ("[REDACTED:account_id]", not a bare "[REDACTED]" — see
+   * ./redactor.ts) precisely so the compiler (../compiler/parameterize.ts)
+   * can still tell which declared input a redacted step value came from,
+   * without ever needing the raw value to be sitting on disk anywhere. The
+   * compiler gets real input values from its caller instead — see
+   * ../compiler/transcript.ts's LaunchInfo override and the compile CLI's
+   * --goal/--input flags.
+   */
+  async writeLaunchInfo(goal: string, inputs: Record<string, string>): Promise<void> {
+    await this.ensureDir();
+    const scrubbed = this.redactor.scrub({ goal, inputs });
+    await writeFile(join(this.runDir, "launch.json"), `${JSON.stringify(scrubbed, null, 2)}\n`, "utf8");
+  }
+
   async writeTranscriptTurn(entry: TranscriptTurnEntry): Promise<void> {
     await this.ensureDir();
     const scrubbed = this.redactor.scrub(entry);

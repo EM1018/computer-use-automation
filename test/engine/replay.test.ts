@@ -187,6 +187,6 @@ describe("replay engine (against the real local app)", () => {
     // Confirms the fill step really would have logged the raw value had the
     // Redactor not scrubbed it — otherwise the assertions above would pass
     // vacuously.
-    expect(stepsLog).toContain("[REDACTED]");
+    expect(stepsLog).toContain("[REDACTED:member_id]");
   });
 });

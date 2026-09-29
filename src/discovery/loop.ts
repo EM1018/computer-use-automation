@@ -57,9 +57,10 @@ export async function runDiscovery(
     Object.keys(inputs).map((name) => ({ name, sensitivity: "pii" as const })),
     inputs,
   );
-  redactor.registerValue(process.env["FCU_OPERATOR_USER"]);
-  redactor.registerValue(process.env["FCU_OPERATOR_PASS"]);
+  redactor.registerValue(process.env["FCU_OPERATOR_USER"], "credential");
+  redactor.registerValue(process.env["FCU_OPERATOR_PASS"], "credential");
   const evidence = new EvidenceWriter(options.evidenceRoot ?? "evidence", runId, redactor);
+  await evidence.writeLaunchInfo(goal, inputs);
 
   const history = new DiscoveryHistory(options.historyWindow);
   const outputs: Record<string, string> = {};
@@ -175,6 +176,7 @@ export async function runDiscovery(
     if (action.action === "stuck") {
       await evidence.writeTranscriptTurn({
         turn,
+        url: observation.url,
         observation_summary: observation.snapshotText,
         model_reasoning: decision.reasoning,
         action,
@@ -193,6 +195,7 @@ export async function runDiscovery(
     if (action.action === "done") {
       await evidence.writeTranscriptTurn({
         turn,
+        url: observation.url,
         observation_summary: observation.snapshotText,
         model_reasoning: decision.reasoning,
         action,
@@ -214,6 +217,7 @@ export async function runDiscovery(
       history.push({ turn, summary });
       await evidence.writeTranscriptTurn({
         turn,
+        url: observation.url,
         observation_summary: observation.snapshotText,
         model_reasoning: decision.reasoning,
         action,
@@ -238,6 +242,7 @@ export async function runDiscovery(
     const turnResult: TurnResult = outcome.ok ? "ok" : "error";
     await evidence.writeTranscriptTurn({
       turn,
+      url: observation.url,
       observation_summary: observation.snapshotText,
       model_reasoning: decision.reasoning,
       action,

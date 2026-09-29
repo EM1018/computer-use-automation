@@ -104,8 +104,8 @@ export async function replay(
 
   const session = await getSession();
   const redactor = new Redactor(artifact.inputs, pre.values);
-  redactor.registerValue(process.env["FCU_OPERATOR_USER"]);
-  redactor.registerValue(process.env["FCU_OPERATOR_PASS"]);
+  redactor.registerValue(process.env["FCU_OPERATOR_USER"], "credential");
+  redactor.registerValue(process.env["FCU_OPERATOR_PASS"], "credential");
   const evidence = new EvidenceWriter(options.evidenceRoot ?? "evidence", runId, redactor);
   if (pre.warning) {
     await evidence.writeWarning(runId, pre.warning);
@@ -752,7 +752,12 @@ async function performRecoveryClick(
   await locator.click();
 }
 
-async function performClick(page: Page, target: ResolvedTarget): Promise<void> {
+// performClick/performFill/performSelect/readText/applyTransform are
+// exported (beyond this module's own use) so the compiler (src/compiler/,
+// added later) can advance a live page between steps using the engine's OWN
+// action-performing primitives while it re-drives a transcript to derive and
+// verify locators — never a second, parallel Playwright automation path.
+export async function performClick(page: Page, target: ResolvedTarget): Promise<void> {
   if (target.kind === "locator") {
     await target.locator.click();
     return;
@@ -760,7 +765,7 @@ async function performClick(page: Page, target: ResolvedTarget): Promise<void> {
   await page.mouse.click(target.x, target.y);
 }
 
-async function performFill(target: ResolvedTarget, value: string): Promise<void> {
+export async function performFill(target: ResolvedTarget, value: string): Promise<void> {
   if (target.kind === "locator") {
     await target.locator.fill(value);
     return;
@@ -768,7 +773,7 @@ async function performFill(target: ResolvedTarget, value: string): Promise<void>
   throw new Error("fill is not supported against a coordinates-resolved target");
 }
 
-async function performSelect(target: ResolvedTarget, value: string): Promise<void> {
+export async function performSelect(target: ResolvedTarget, value: string): Promise<void> {
   if (target.kind === "locator") {
     await target.locator.selectOption(value);
     return;
@@ -776,7 +781,7 @@ async function performSelect(target: ResolvedTarget, value: string): Promise<voi
   throw new Error("select is not supported against a coordinates-resolved target");
 }
 
-async function readText(page: Page, target: ResolvedTarget): Promise<string> {
+export async function readText(page: Page, target: ResolvedTarget): Promise<string> {
   if (target.kind === "locator") {
     return await target.locator.innerText();
   }
@@ -795,7 +800,7 @@ function substitute(template: string, inputs: InvocationInputs): string {
   });
 }
 
-function applyTransform(raw: string, transform: Transform | undefined): string | number {
+export function applyTransform(raw: string, transform: Transform | undefined): string | number {
   const trimmed = raw.trim();
   switch (transform) {
     case "parse_currency":

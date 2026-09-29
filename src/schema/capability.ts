@@ -246,6 +246,17 @@ export type Step = z.infer<typeof StepSchema>;
 
 // Outcomes are LEGITIMATE results the caller needs, not failures — e.g.
 // "no such member" is a business outcome, not an automation error.
+//
+// `provenance` is honest bookkeeping for the compiler (src/compiler/, not
+// built when this schema was first written): the discovery transcript's
+// happy path never encounters "not found", so an outcome can only ever come
+// from either (a) a live probing pass that re-drove the app with alternate
+// inputs and observed what it actually rendered, or (b) a human declaring
+// it by hand when probing was skipped. Optional so the hand-authored example
+// artifact (predates the compiler) stays valid without one.
+export const OutcomeProvenanceSchema = z.enum(["probed", "hand_declared"]);
+export type OutcomeProvenance = z.infer<typeof OutcomeProvenanceSchema>;
+
 export const OutcomeSchema = z.object({
   id: z.string().min(1),
   class: z.literal("business_outcome"),
@@ -254,6 +265,7 @@ export const OutcomeSchema = z.object({
     status: z.string().min(1),
     message: z.string().optional(),
   }),
+  provenance: OutcomeProvenanceSchema.optional(),
 });
 export type Outcome = z.infer<typeof OutcomeSchema>;
 
@@ -324,5 +336,12 @@ export const CapabilityArtifactSchema = z.object({
   outcomes: z.array(OutcomeSchema),
   recoverables: z.array(RecoverableSchema),
   verification: VerificationSchema.optional(),
+  // Free-form flags from the compiler (src/compiler/) that don't fit any
+  // other typed field — e.g. "step s4 has zero verified locator strategies".
+  // Deliberately excluded from classifyChange's comparison (../version.ts):
+  // a note appearing/disappearing is not a behavior change. Never set by
+  // discovery or replay; only the compiler and a human editing a draft
+  // touch this.
+  compiler_notes: z.array(z.string().min(1)).optional(),
 });
 export type CapabilityArtifact = z.infer<typeof CapabilityArtifactSchema>;

@@ -11,6 +11,7 @@
     "replay": "tsx src/cli/replay.ts",
     "demo:escalation": "tsx src/demo/escalation.ts",
     "discover": "tsx src/cli/discover.ts",
+    "compile": "tsx src/cli/compile.ts",
     "test:discovery": "vitest run --config vitest.discovery.config.ts",
     "discover:e2e": "tsx src/demo/discover-e2e.ts"
   },

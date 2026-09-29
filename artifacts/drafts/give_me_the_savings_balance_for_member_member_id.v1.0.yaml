@@ -1,0 +1,154 @@
+schema_version: 1
+capability:
+  id: give_me_the_savings_balance_for_member_member_id
+  version:
+    major: 1
+    minor: 0
+  title: Give me the savings balance for member {{member_id}}
+  description: Give me the savings balance for member {{member_id}}
+  status: draft
+recorded_against:
+  app: legacy-app
+  app_version: 1.0.0
+  tenant: default
+  base_url: http://127.0.0.1:5001
+provenance:
+  discovered_at: '2026-09-29T21:56:25.481Z'
+  model: claude-sonnet-5
+  run_id: a02d862c-f802-4f27-b23f-ade013c791e2
+  transcript_ref: evidence/a02d862c-f802-4f27-b23f-ade013c791e2/transcript.jsonl
+inputs:
+  - name: member_id
+    type: string
+    required: true
+    pattern: ^[0-9]{5}$
+    description: >-
+      Value supplied for "member_id" at discovery launch; description inferred
+      by the compiler — review before approval.
+    sensitivity: pii
+outputs:
+  - name: savings_balance
+    type: number
+    description: >-
+      Value captured by the "savings_balance" extraction step; description
+      inferred by the compiler — review before approval.
+steps:
+  - id: s1
+    action: fill
+    target:
+      frame: top
+      strategies:
+        - kind: role_name
+          role: textbox
+          name: Member ID
+          confidence: high
+        - kind: label
+          text: Member ID
+          confidence: high
+        - kind: attribute
+          selector: '#f_mbr_id'
+          confidence: medium
+        - kind: text_anchored
+          anchor: Member ID
+          relation: right_of
+          confidence: medium
+    value: '{{member_id}}'
+    risk: safe
+  - id: s2
+    action: click
+    target:
+      frame: top
+      strategies:
+        - kind: role_name
+          role: button
+          name: Search
+          confidence: high
+        - kind: text_anchored
+          anchor: Member ID
+          relation: right_of
+          confidence: medium
+    wait:
+      for: navigation
+      timeout_ms: 10000
+    risk: safe
+  - id: s3
+    action: assert
+    wait:
+      for: element_present
+      timeout_ms: 5000
+    checkpoint:
+      kind: text_present
+      pattern: Name
+      within: b >> nth=0
+    risk: safe
+    on_fail: evaluate_outcomes
+  - id: s4
+    action: extract
+    target:
+      frame: iframe[src*="panel"]
+      strategies:
+        - kind: role_name
+          role: cell
+          name: $2,450.10
+          confidence: high
+        - kind: text_anchored
+          anchor: Savings
+          relation: right_of
+          confidence: medium
+    into: savings_balance
+    transform: parse_currency
+    wait:
+      for: element_present
+      timeout_ms: 5000
+    risk: safe
+outcomes:
+  - id: not_found
+    class: business_outcome
+    detect:
+      kind: text_present
+      pattern: No member found
+      within: div.msg_err
+    returns:
+      status: not_found
+      message: No member found
+    provenance: probed
+  - id: permission_denied
+    class: business_outcome
+    detect:
+      kind: text_present
+      pattern: You do not have permission to view this member\.
+      within: div.msg_err
+    returns:
+      status: permission_denied
+      message: You do not have permission to view this member.
+    provenance: probed
+recoverables:
+  - id: maintenance_interstitial
+    detect:
+      kind: text_present
+      pattern: Scheduled System Maintenance
+      within: div.msg_warn
+    recover:
+      action: click
+      role: button
+      name: Continue
+    max_attempts: 1
+  - id: session_expired
+    detect:
+      kind: text_present
+      pattern: Session expired\. Please log in again\.
+      within: div.msg_err
+    recover:
+      action: escalate
+      reason: >-
+        Session expired mid-flow; automation holds no credentials to
+        re-authenticate.
+    max_attempts: 1
+verification:
+  status: passed
+  run: acb46569-a9a0-484d-8e47-7174388e8036
+compiler_notes:
+  - >-
+    the supplied goal/title/description named a supplied input's value directly
+    and was parameterized to {{input_name}} before being used — the original
+    wording is still visible in this run's evidence/<run_id>/launch.json.

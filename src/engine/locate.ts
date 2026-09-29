@@ -51,7 +51,13 @@ export async function resolveTarget(scope: LocatorScope, target: Target, stepId:
   throw new NoTargetFound(stepId);
 }
 
-function buildLocator(scope: LocatorScope, strategy: Exclude<Strategy, { kind: "coordinates" }>): Locator {
+/**
+ * Exported (beyond resolveTarget's own use) so the compiler (src/compiler/,
+ * added later) can verify a CANDIDATE strategy against a live page through
+ * the exact same resolution code replay will use later — never a second,
+ * parallel notion of "does this locator match".
+ */
+export function buildLocator(scope: LocatorScope, strategy: Exclude<Strategy, { kind: "coordinates" }>): Locator {
   switch (strategy.kind) {
     case "role_name":
       return scope.getByRole(strategy.role as AriaRole, { name: strategy.name, exact: true });
